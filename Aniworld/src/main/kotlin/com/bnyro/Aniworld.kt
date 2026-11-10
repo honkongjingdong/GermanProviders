@@ -116,44 +116,55 @@ open class Aniworld : MainAPI() {
         }
     }
 
-    override suspend fun loadLinks(
-        data: String,
-        isCasting: Boolean,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        val document = app.get(data).document
-        document.select("div.hosterSiteVideo ul li").map {
-            Triple(
-                it.attr("data-lang-key"),
-                it.attr("data-link-target"),
-                it.select("h4").text()
-            )
-        }.amap {
-            val redirectUrl = app.get(fixUrl(it.second)).url
-            val lang = it.first.getLanguage(document)
-            val name = "${it.third} [${lang}]"
+    
 
-            loadExtractor(redirectUrl, data, subtitleCallback) { link ->
-                val linkWithFixedName = runBlocking {
-                    newExtractorLink(
-                        source = it.third,
-                        name = name,
-                        url = link.url
-                    ) {
-                        referer = link.referer
-                        quality = link.quality
-                        type = link.type
-                        headers = link.headers
-                        extractorData = link.extractorData
-                    }
-                }
-                callback.invoke(linkWithFixedName)
-            }
-        }
+override suspend fun loadLinks(
+    data: String,
+    isCasting: Boolean,
+    subtitleCallback: (SubtitleFile) -> Unit,
+    callback: (ExtractorLink) -> Unit
+): Boolean {
+    val document = app.get(data).document
 
-        return true
+    val entries = document.select("div.hosterSiteVideo ul li").sortedBy { entry ->
+        val hoster = entry.select("h4").text()
+        val lang = entry.attr("data-lang-key").getLanguage(document)
+
+        if (hoster == "VOE" && lang == "Deutsch") 0 else 1
     }
+
+    for (entry in entries) {
+        val langKey = entry.attr("data-lang-key")
+        val target = entry.attr("data-link-target")
+        val hoster = entry.select("h4").text()
+
+        val redirectUrl = app.get(fixUrl(target)).url
+        val lang = langKey.getLanguage(document).orEmpty()
+        val name = if (lang.isBlank()) hoster else "$hoster [$lang]"
+
+        val sourceName = if (hoster == "VOE") name else hoster
+
+        loadExtractor(redirectUrl, data, subtitleCallback) { link ->
+            val fixedLink = runBlocking {
+                newExtractorLink(
+                    source = sourceName,
+                    name = name,
+                    url = link.url
+                ) {
+                    referer = link.referer
+                    quality = link.quality
+                    type = link.type
+                    headers = link.headers
+                    extractorData = link.extractorData
+                }
+            }
+
+            callback(fixedLink)
+        }
+    }
+
+    return true
+}
 
     private fun Element.toSearchResult(): TvSeriesSearchResponse? {
         val href = fixUrlNull(this.selectFirst("a")?.attr("href")) ?: return null
